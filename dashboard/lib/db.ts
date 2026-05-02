@@ -71,8 +71,8 @@ export function updateWorkflowStage(articleId: number, stage: string) {
 
 export function getApiKeys(serviceName?: string) {
   const q = serviceName
-    ? "SELECT id, service_name, key_label, is_active, last_used_at, error_count FROM api_keys WHERE service_name = ? ORDER BY id"
-    : "SELECT id, service_name, key_label, is_active, last_used_at, error_count FROM api_keys ORDER BY service_name, id";
+    ? "SELECT id, service_name, key_label, api_key, extra, is_active, last_used_at, error_count FROM api_keys WHERE service_name = ? ORDER BY id"
+    : "SELECT id, service_name, key_label, api_key, extra, is_active, last_used_at, error_count FROM api_keys ORDER BY service_name, id";
   return serviceName ? getDb().prepare(q).all(serviceName) : getDb().prepare(q).all();
 }
 
@@ -84,10 +84,22 @@ export function getAiSettings(channelId?: number) {
     .get(channelId ?? null);
 }
 
-export function addApiKey(serviceName: string, apiKey: string, label: string) {
+export function addApiKey(serviceName: string, apiKey: string, label: string, extra?: string) {
   return getDb()
-    .prepare("INSERT INTO api_keys (service_name, api_key, key_label) VALUES (?, ?, ?)")
-    .run(serviceName, apiKey, label);
+    .prepare("INSERT INTO api_keys (service_name, api_key, key_label, extra) VALUES (?, ?, ?, ?)")
+    .run(serviceName, apiKey, label, extra ?? null);
+}
+
+export function updateApiKey(id: number, fields: { key_label?: string; api_key?: string; extra?: string; is_active?: boolean }) {
+  const db = getDb();
+  if (fields.key_label !== undefined)
+    db.prepare("UPDATE api_keys SET key_label = ? WHERE id = ?").run(fields.key_label, id);
+  if (fields.api_key !== undefined)
+    db.prepare("UPDATE api_keys SET api_key = ? WHERE id = ?").run(fields.api_key, id);
+  if (fields.extra !== undefined)
+    db.prepare("UPDATE api_keys SET extra = ? WHERE id = ?").run(fields.extra, id);
+  if (fields.is_active !== undefined)
+    db.prepare("UPDATE api_keys SET is_active = ? WHERE id = ?").run(fields.is_active ? 1 : 0, id);
 }
 
 export function toggleApiKey(id: number, isActive: boolean) {
@@ -124,7 +136,7 @@ export function toggleChannel(id: number, isActive: boolean) {
 export function upsertAiSettings(settings: {
   channel_id?: number | null;
   script_provider: string; script_model: string;
-  image_provider: string; tts_provider: string;
+  image_provider: string; image_model?: string; tts_provider: string;
 }) {
   const db = getDb();
   const existing = db
@@ -132,11 +144,11 @@ export function upsertAiSettings(settings: {
     .get(settings.channel_id ?? null);
   if (existing) {
     db.prepare(
-      `UPDATE ai_settings SET script_provider=?, script_model=?, image_provider=?, tts_provider=?, updated_at=datetime('now','localtime') WHERE channel_id IS ?`
-    ).run(settings.script_provider, settings.script_model, settings.image_provider, settings.tts_provider, settings.channel_id ?? null);
+      `UPDATE ai_settings SET script_provider=?, script_model=?, image_provider=?, image_model=?, tts_provider=?, updated_at=datetime('now','localtime') WHERE channel_id IS ?`
+    ).run(settings.script_provider, settings.script_model, settings.image_provider, settings.image_model ?? "", settings.tts_provider, settings.channel_id ?? null);
   } else {
     db.prepare(
-      "INSERT INTO ai_settings (channel_id, script_provider, script_model, image_provider, tts_provider) VALUES (?, ?, ?, ?, ?)"
-    ).run(settings.channel_id ?? null, settings.script_provider, settings.script_model, settings.image_provider, settings.tts_provider);
+      "INSERT INTO ai_settings (channel_id, script_provider, script_model, image_provider, image_model, tts_provider) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(settings.channel_id ?? null, settings.script_provider, settings.script_model, settings.image_provider, settings.image_model ?? "", settings.tts_provider);
   }
 }

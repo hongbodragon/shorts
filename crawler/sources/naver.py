@@ -35,14 +35,44 @@ def fetch_news(keyword: str, display: int = 20) -> list[dict]:
 
 def _normalize(item: dict) -> dict:
     import re
+    from html import unescape
     clean = re.compile(r"<[^>]+>")
     return {
-        "title": clean.sub("", item.get("title", "")),
+        "title": unescape(clean.sub("", item.get("title", ""))),
         "url": item.get("originallink") or item.get("link", ""),
-        "description": clean.sub("", item.get("description", "")),
+        "description": unescape(clean.sub("", item.get("description", ""))),
         "published_at": _parse_date(item.get("pubDate", "")),
-        "source": "네이버뉴스",
+        "source": _extract_source(item.get("originallink") or item.get("link", "")),
     }
+
+
+def _extract_source(url: str) -> str:
+    """URL에서 언론사 도메인 추출."""
+    import re
+    m = re.search(r"https?://(?:www\.)?([^/]+)", url)
+    if not m:
+        return "네이버뉴스"
+    domain = m.group(1)
+    # 알려진 도메인 매핑
+    mapping = {
+        "n.news.naver.com": "네이버뉴스",
+        "chosun.com": "조선일보",
+        "joongang.co.kr": "중앙일보",
+        "donga.com": "동아일보",
+        "hani.co.kr": "한겨레",
+        "khan.co.kr": "경향신문",
+        "yonhapnews.co.kr": "연합뉴스",
+        "yna.co.kr": "연합뉴스",
+        "newsis.com": "뉴시스",
+        "news1.kr": "뉴스1",
+        "mt.co.kr": "머니투데이",
+        "hankyung.com": "한국경제",
+        "mk.co.kr": "매일경제",
+    }
+    for key, name in mapping.items():
+        if key in domain:
+            return name
+    return domain
 
 
 def _parse_date(pub_date: str) -> str:

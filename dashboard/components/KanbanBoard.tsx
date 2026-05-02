@@ -20,6 +20,7 @@ type Article = {
   title: string;
   url: string;
   source: string;
+  published_at: string;
   collected_at: string;
   stage: string;
   is_ab_test: number;
@@ -31,6 +32,7 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setGrouped({});  // 탭 전환 시 이전 데이터 즉시 초기화
     const res = await fetch(`/api/articles?categoryId=${categoryId}`);
     setGrouped(await res.json());
     setLoading(false);
@@ -118,7 +120,7 @@ function ArticleCard({
 
       <div className="flex items-center justify-between text-gray-400">
         <span>{article.source}</span>
-        <span>{article.collected_at?.slice(5, 16)}</span>
+        <span title={`수집: ${article.collected_at}`}>{(article.published_at || article.collected_at)?.slice(5, 16)}</span>
       </div>
 
       <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">

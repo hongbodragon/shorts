@@ -70,6 +70,38 @@
 
 - HTTP 요청만으로 충분 (방산 뉴스는 대부분 정적 HTML)
 - 네이버 뉴스 검색 API 한도: 25,000건/일 (카테고리 5개 × 키워드 10개 × 24회 = 1,200회/일 → 한도 5% 미만)
+- **수집 키워드 저장**: 기사 저장 시 `search_keyword` 컬럼에 검색 키워드 기록 → DataLab 조회 및 필터링에 활용
+- **제목 필터**: 검색 키워드가 제목에 포함된 기사만 저장 (관련 없는 기사 필터링)
+
+### 2-2-1. 커뮤니티 모니터링 (루리웹 밀리터리)
+
+**목적**: 네이버 뉴스 API로는 알 수 없는 "실제 반응(댓글·추천)"을 커뮤니티에서 파악
+
+**흐름**:
+```
+루리웹 밀리터리 게시판 크롤링 (1시간마다)
+→ 게시글 제목 + 댓글수 + 추천수 수집
+→ 임계값 초과 게시글 탐지 (댓글 > N개, 추천 > N개)
+→ 해당 제목으로 네이버 뉴스 검색 → 원문 기사 가져오기
+→ 루리웹 상위 댓글 수집 (여론/반응 데이터)
+→ 기사 + 댓글 반응을 함께 저장
+→ AI 스크립트 생성 시 반응 댓글을 "시청자 반응 예측 자료"로 활용
+```
+
+**스크립트 활용 예시**:
+```
+[기사 내용으로 스크립트 작성]
+...
+"온라인 커뮤니티에서는 '드디어 실전 배치', '이제 수출만 남았다'는
+ 반응이 쏟아지고 있습니다."
+```
+
+**루리웹 크롤링 대상**:
+- URL: `https://bbs.ruliweb.com/best/board/300052` (밀리터리 베스트)
+- 수집 항목: 제목, URL, 추천수, 댓글수, 작성시각
+- 댓글 상위 10개 수집 (BeautifulSoup HTML 파싱)
+
+**DB 테이블**: `community_posts` (제목, URL, 추천수, 댓글수, 수집시각, 연결된 article_id)
 
 ---
 
@@ -388,11 +420,12 @@ Telegram Bot Token    × 1개
 
 ### Phase 1: 로컬에서 전체 파이프라인 완성
 
-1. **SQLite 스키마 설계** (categories, channels, api_keys, ai_settings, articles, article_metrics, videos, video_metrics, ab_tests, workflow_state)
+1. **SQLite 스키마 설계** (categories, channels, api_keys, ai_settings, articles, article_metrics, community_posts, videos, video_metrics, ab_tests, workflow_state)
 2. **네이버 뉴스 API + RSS 크롤러** (Python, APScheduler로 1시간마다 자동 실행)
-3. **반응 점수 계산 로직** + 임계값 설정
-4. **텔레그램 봇 알람** 연동
-5. **Next.js 대시보드 localhost:3000** (Kanban 보드, 카테고리 탭)
+3. **루리웹 밀리터리 커뮤니티 모니터링** (1시간마다) → 핫 게시글 탐지 → 네이버 검색 → 댓글 수집
+4. **반응 점수 계산 로직** + 임계값 설정
+5. **텔레그램 봇 알람** 연동
+6. **Next.js 대시보드 localhost:3000** (Kanban 보드, 카테고리 탭)
 6. **AI 스크립트/제목/태그 생성** (Claude/GPT/Gemini 선택)
 7. **AWS Polly TTS** 연동
 8. **이미지 생성** (DALL-E + Pexels 선택)

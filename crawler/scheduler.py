@@ -1,8 +1,23 @@
 """APScheduler: 1시간마다 크롤링 + 반응 체크."""
 import json
 import sys
+from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from db import get_conn
+
+
+def _filter_recent(articles: list[dict], hours: int = 2) -> list[dict]:
+    """published_at 기준으로 최근 N시간 이내 기사만 반환."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    result = []
+    for a in articles:
+        try:
+            dt = datetime.strptime(a["published_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                result.append(a)
+        except Exception:
+            result.append(a)  # 파싱 실패시 포함
+    return result
 
 
 def crawl_all():
@@ -22,8 +37,10 @@ def crawl_all():
         print(f"[크롤링] {cat['name']} ({len(keywords)}개 키워드)")
         for kw in keywords:
             try:
-                articles = fetch_news(kw, display=10)
-                saved = save_articles(cat["id"], articles)
+                articles = fetch_news(kw, display=20)
+                # 최근 2시간 이내 기사만 저장 (오래된 기사 제외)
+                recent = _filter_recent(articles, hours=1)
+                saved = save_articles(cat["id"], recent)
                 total += saved
             except Exception as e:
                 print(f"  키워드 '{kw}' 오류: {e}")
@@ -36,6 +53,20 @@ def crawl_all():
             print(f"  RSS 오류: {e}")
 
         print(f"  → 신규 {total}건 저장")
+
+
+def crawl_community():
+    """루리웹 밀리터리 핫 게시글 모니터링."""
+    from sources.ruliweb import run as ruliweb_run
+    from db import get_conn
+
+    # 방산/국방 카테고리 ID 조회
+    conn = get_conn()
+    cat = conn.execute("SELECT id FROM categories WHERE slug='defense'").fetchone()
+    conn.close()
+    category_id = cat["id"] if cat else 1
+
+    ruliweb_run(category_id)
 
 
 def check_metrics():
@@ -55,6 +86,7 @@ def check_metrics():
 def run_once():
     print("=== 1회 실행 모드 ===")
     crawl_all()
+    crawl_community()
     check_metrics()
     print("=== 완료 ===")
 
@@ -69,6 +101,7 @@ def run_scheduler():
     scheduler.add_job(check_metrics, "date")
     # 이후 1시간마다
     scheduler.add_job(crawl_all, "interval", hours=1, id="crawl")
+    scheduler.add_job(crawl_community, "interval", hours=1, id="community")
     scheduler.add_job(check_metrics, "interval", hours=1, id="metrics",
                       minutes=5)  # 크롤링 5분 후 체크
 
