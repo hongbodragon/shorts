@@ -38,6 +38,9 @@ const SERVICE_CONFIGS: Record<string, { label: string; fields: { key: string; la
   telegram:   { label: "Telegram Bot", fields: [
     { key: "api_key", label: "Bot Token", placeholder: "123456:ABC-DEF..." },
   ]},
+  youtube_data: { label: "YouTube Data API", fields: [
+    { key: "api_key", label: "API Key", placeholder: "AIza..." },
+  ]},
 };
 
 const SERVICES = Object.keys(SERVICE_CONFIGS);
@@ -109,7 +112,7 @@ export default function KeysPage() {
       body: JSON.stringify({ service_name: form.service_name, api_key: form.api_key, key_label: form.key_label, extra }),
     });
     const extraKeys = (SERVICE_CONFIGS[form.service_name]?.fields ?? []).filter(f => f.isExtra).map(f => f.key);
-    setForm((f) => { const next = { ...f, api_key: "", key_label: "" }; extraKeys.forEach(k => { next[k] = ""; }); return next; });
+    setForm((f) => { const next: Record<string, string> = { ...f, api_key: "", key_label: "" }; extraKeys.forEach(k => { next[k] = ""; }); return next; });
     await load();
     setSaving(false);
   };

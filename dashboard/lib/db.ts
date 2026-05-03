@@ -20,12 +20,14 @@ export function getCategories() {
 
 export function getArticlesByCategory(categoryId: number, stage?: string) {
   const q = stage
-    ? `SELECT a.*, w.stage, w.is_ab_test, w.channel_id
+    ? `SELECT a.id, a.title, a.url, a.source, a.published_at, a.collected_at, a.view_cnt, a.comment_cnt,
+              w.stage, w.is_ab_test, w.channel_id
        FROM articles a
        LEFT JOIN workflow_state w ON w.article_id = a.id
        WHERE a.category_id = ? AND (w.stage = ? OR (w.stage IS NULL AND ? = 'collected'))
        ORDER BY a.collected_at DESC LIMIT 100`
-    : `SELECT a.*, w.stage, w.is_ab_test, w.channel_id
+    : `SELECT a.id, a.title, a.url, a.source, a.published_at, a.collected_at, a.view_cnt, a.comment_cnt,
+              w.stage, w.is_ab_test, w.channel_id
        FROM articles a
        LEFT JOIN workflow_state w ON w.article_id = a.id
        WHERE a.category_id = ?

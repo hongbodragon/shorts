@@ -1,93 +1,68 @@
-"""APScheduler: 1시간마다 크롤링 + 반응 체크."""
-import json
+"""APScheduler: 1시간마다 커뮤니티 크롤링 + 핫 콘텐츠 알람."""
 import sys
-from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from db import get_conn
 
 
-def _filter_recent(articles: list[dict], hours: int = 2) -> list[dict]:
-    """published_at 기준으로 최근 N시간 이내 기사만 반환."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    result = []
-    for a in articles:
-        try:
-            dt = datetime.strptime(a["published_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if dt >= cutoff:
-                result.append(a)
-        except Exception:
-            result.append(a)  # 파싱 실패시 포함
-    return result
-
-
-def crawl_all():
-    """활성 카테고리의 모든 키워드 크롤링."""
-    from sources.naver import fetch_news, save_articles
-    from sources.rss import fetch_and_save
-
+def _get_defense_category_id() -> int:
     conn = get_conn()
-    categories = conn.execute(
-        "SELECT * FROM categories WHERE is_active = 1"
-    ).fetchall()
+    row = conn.execute("SELECT id FROM categories WHERE slug='defense'").fetchone()
     conn.close()
-
-    for cat in categories:
-        keywords = json.loads(cat["keywords"])
-        total = 0
-        print(f"[크롤링] {cat['name']} ({len(keywords)}개 키워드)")
-        for kw in keywords:
-            try:
-                articles = fetch_news(kw, display=20)
-                # 최근 2시간 이내 기사만 저장 (오래된 기사 제외)
-                recent = _filter_recent(articles, hours=1)
-                saved = save_articles(cat["id"], recent)
-                total += saved
-            except Exception as e:
-                print(f"  키워드 '{kw}' 오류: {e}")
-
-        # RSS
-        try:
-            rss_saved = fetch_and_save(cat["id"], cat["slug"])
-            total += rss_saved
-        except Exception as e:
-            print(f"  RSS 오류: {e}")
-
-        print(f"  → 신규 {total}건 저장")
+    return row["id"] if row else 1
 
 
-def crawl_community():
-    """루리웹 밀리터리 핫 게시글 모니터링."""
-    from sources.ruliweb import run as ruliweb_run
-    from db import get_conn
+def crawl_communities():
+    """다모앙 + 밀리돔 크롤링."""
+    from sources.damoang import run as damoang_run
+    from sources.milidom import run as milidom_run
 
-    # 방산/국방 카테고리 ID 조회
-    conn = get_conn()
-    cat = conn.execute("SELECT id FROM categories WHERE slug='defense'").fetchone()
-    conn.close()
-    category_id = cat["id"] if cat else 1
+    category_id = _get_defense_category_id()
 
-    ruliweb_run(category_id)
+    damoang_hot = damoang_run(category_id)
+    milidom_hot = milidom_run(category_id)
+
+    total_hot = len(damoang_hot) + len(milidom_hot)
+    if total_hot:
+        print(f"  → 핫 콘텐츠 총 {total_hot}건 (다모앙 {len(damoang_hot)}, 밀리돔 {len(milidom_hot)})")
+
+    return {"damoang": damoang_hot, "milidom": milidom_hot}
 
 
-def check_metrics():
-    """반응 체크 → 임계값 초과 시 텔레그램 알람."""
-    from metrics import check_article_metrics
+def check_hot_and_alert():
+    """핫 콘텐츠 → 텔레그램 알람."""
+    from metrics import get_hot_community_posts, get_hot_milidom_articles
     from alert import send_alert
 
-    print("[반응 체크] 1시간 전 기사 반응 확인 중...")
-    triggered = check_article_metrics()
-    if triggered:
-        print(f"  → {len(triggered)}건 임계값 초과, 알람 전송")
-        send_alert(triggered)
-    else:
-        print("  → 임계값 초과 기사 없음")
+    print("[핫 체크] 다모앙/밀리돔 핫 콘텐츠 확인 중...")
+    hot_posts = get_hot_community_posts()
+    hot_articles = get_hot_milidom_articles()
+
+    if not hot_posts and not hot_articles:
+        print("  → 새로운 핫 콘텐츠 없음")
+        return
+
+    triggered = []
+    triggered.extend([{"type": "community", "item": p} for p in hot_posts])
+    triggered.extend([{"type": "article", "item": a} for a in hot_articles])
+
+    print(f"  → {len(triggered)}건 핫 콘텐츠 알람 전송")
+    send_alert(triggered)
+
+    # alerted_at 기록
+    conn = get_conn()
+    for p in hot_posts:
+        conn.execute("UPDATE community_posts SET alerted_at=datetime('now','localtime') WHERE id=?", (p["id"],))
+    for a in hot_articles:
+        conn.execute("UPDATE articles SET alerted_at=datetime('now','localtime') WHERE id=?", (a["id"],))
+    conn.commit()
+    conn.close()
+
 
 
 def run_once():
     print("=== 1회 실행 모드 ===")
-    crawl_all()
-    crawl_community()
-    check_metrics()
+    crawl_communities()
+    check_hot_and_alert()
     print("=== 완료 ===")
 
 
@@ -97,13 +72,12 @@ def run_scheduler():
 
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
     # 시작 즉시 1회 실행
-    scheduler.add_job(crawl_all, "date")
-    scheduler.add_job(check_metrics, "date")
+    scheduler.add_job(crawl_communities, "date")
     # 이후 1시간마다
-    scheduler.add_job(crawl_all, "interval", hours=1, id="crawl")
-    scheduler.add_job(crawl_community, "interval", hours=1, id="community")
-    scheduler.add_job(check_metrics, "interval", hours=1, id="metrics",
-                      minutes=5)  # 크롤링 5분 후 체크
+    scheduler.add_job(crawl_communities, "interval", hours=1, id="crawl")
+    # 크롤링 10분 후 핫 체크 + 알람
+    scheduler.add_job(check_hot_and_alert, "interval", hours=1, id="alert",
+                      minutes=10)
 
     try:
         scheduler.start()

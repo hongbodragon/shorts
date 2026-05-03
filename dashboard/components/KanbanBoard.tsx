@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { ExternalLink, Trash2, CheckCircle, RefreshCw } from "lucide-react";
+import { ExternalLink, Trash2, CheckCircle, RefreshCw, MessageCircle, Eye } from "lucide-react";
+import ArticleModal from "./ArticleModal";
 
 const STAGES = [
-  { key: "collected",  label: "기사 확인",     color: "bg-gray-100" },
+  { key: "collected",  label: "수집됨",         color: "bg-gray-100" },
   { key: "approved",   label: "반응 좋음",     color: "bg-green-100" },
   { key: "scripting",  label: "스크립트",      color: "bg-blue-100" },
   { key: "imaging",    label: "이미지/영상",    color: "bg-purple-100" },
@@ -22,6 +23,8 @@ type Article = {
   source: string;
   published_at: string;
   collected_at: string;
+  view_cnt: number;
+  comment_cnt: number;
   stage: string;
   is_ab_test: number;
 };
@@ -29,10 +32,11 @@ type Article = {
 export default function KanbanBoard({ categoryId }: { categoryId: number }) {
   const [grouped, setGrouped] = useState<Record<string, Article[]>>({});
   const [loading, setLoading] = useState(true);
+  const [openArticleId, setOpenArticleId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setGrouped({});  // 탭 전환 시 이전 데이터 즉시 초기화
+    setGrouped({});
     const res = await fetch(`/api/articles?categoryId=${categoryId}`);
     setGrouped(await res.json());
     setLoading(false);
@@ -55,6 +59,13 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
 
   return (
     <div>
+      {openArticleId && (
+        <ArticleModal
+          articleId={openArticleId}
+          onClose={() => setOpenArticleId(null)}
+          onStageChange={load}
+        />
+      )}
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm text-gray-500">전체 {totalArticles}건</span>
         <button onClick={load} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800">
@@ -81,6 +92,7 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
                     article={a}
                     currentStage={key}
                     onMove={moveStage}
+                    onOpen={() => setOpenArticleId(a.id)}
                   />
                 ))}
                 {articles.length === 0 && (
@@ -99,10 +111,12 @@ function ArticleCard({
   article,
   currentStage,
   onMove,
+  onOpen,
 }: {
   article: Article;
   currentStage: string;
   onMove: (id: number, stage: string) => void;
+  onOpen: () => void;
 }) {
   const stageKeys = STAGES.map((s) => s.key);
   const currentIdx = stageKeys.indexOf(currentStage);
@@ -110,7 +124,10 @@ function ArticleCard({
   const isTrash = currentStage === "trash";
 
   return (
-    <div className="bg-white rounded-lg p-3 shadow-sm text-xs group">
+    <div
+      className="bg-white rounded-lg p-3 shadow-sm text-xs group cursor-pointer hover:shadow-md transition-shadow"
+      onClick={onOpen}
+    >
       <div className="flex items-start justify-between gap-1 mb-2">
         <p className="font-medium text-gray-800 leading-snug line-clamp-2">{article.title}</p>
         {article.is_ab_test === 1 && (
@@ -118,12 +135,32 @@ function ArticleCard({
         )}
       </div>
 
-      <div className="flex items-center justify-between text-gray-400">
-        <span>{article.source}</span>
+      <div className="flex items-center justify-between text-gray-400 mt-1">
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-gray-400">{article.source}</span>
+          {article.comment_cnt > 0 && (
+            <span className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${
+              article.comment_cnt >= 5
+                ? "bg-blue-500 text-white"
+                : "bg-blue-100 text-blue-700"
+            }`}>
+              <MessageCircle size={8} />{article.comment_cnt}
+            </span>
+          )}
+          {article.view_cnt > 0 && (
+            <span className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${
+              article.view_cnt >= 1000
+                ? "bg-orange-500 text-white"
+                : "bg-orange-100 text-orange-600"
+            }`}>
+              <Eye size={8} />{article.view_cnt >= 1000 ? `${(article.view_cnt / 1000).toFixed(1)}k` : article.view_cnt}
+            </span>
+          )}
+        </div>
         <span title={`수집: ${article.collected_at}`}>{(article.published_at || article.collected_at)?.slice(5, 16)}</span>
       </div>
 
-      <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
         <a
           href={article.url}
           target="_blank"

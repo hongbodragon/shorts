@@ -10,24 +10,25 @@ const SCRIPT_MODELS: Record<string, string[]> = {
 
 const IMAGE_PROVIDERS = ["openai", "gemini", "pexels", "unsplash"];
 const IMAGE_MODELS: Record<string, string[]> = {
-  openai:   ["dall-e-3", "dall-e-2"],
-  gemini:   ["imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"],
-  pexels:   [],   // 모델 선택 없음 (사진 검색 API)
+  openai:   ["gpt-image-1-mini", "gpt-image-1.5", "gpt-image-1", "dall-e-3", "dall-e-2"],
+  gemini:   ["imagen-4.0-generate-001", "imagen-4.0-fast-generate-001", "imagen-4.0-ultra-generate-001"],
+  pexels:   [],
   unsplash: [],
 };
 const IMAGE_NOTES: Record<string, string> = {
-  openai:   "DALL-E 3: 고품질, $0.04/장 | DALL-E 2: 저렴, $0.018/장",
-  gemini:   "Imagen 3: 최신 고품질 | Fast: 속도 우선",
+  openai:   "gpt-image-1-mini: $0.011/장(medium) 추천 · gpt-image-1.5: $0.034/장 고품질 · dall-e-3: ⚠️ 2026-05-12 지원종료",
+  gemini:   "Imagen 4: 유료 플랜 필요 · Fast: 속도 우선 · Ultra: 최고품질",
   pexels:   "저작권 무료 사진 검색 — 무료, API 키 탭에서 등록",
-  unsplash:  "저작권 무료 사진 검색 — 무료, API 키 탭에서 등록",
+  unsplash: "저작권 무료 사진 검색 — 무료, API 키 탭에서 등록",
 };
 
-const TTS_PROVIDERS = ["polly", "google", "typecast", "elevenlabs"];
+const TTS_PROVIDERS = ["openai", "google", "typecast", "elevenlabs", "polly"];
 const TTS_NOTES: Record<string, string> = {
-  polly:      "AWS Polly Neural — 100만자/월 12개월 무료 (권장)",
-  google:     "Google TTS Wavenet — 100만자/월 영구 무료",
-  typecast:   "TYPECAST — 고자연스러운 한국어 TTS, 유료",
-  elevenlabs: "ElevenLabs — 상업용 $5/월부터 (무료 플랜 약관 위반 ⚠️)",
+  openai:     "OpenAI TTS — tts-1 모델, 한국어 지원, $15/100만자 · 바로 사용 가능 (권장)",
+  google:     "Google TTS Wavenet — ko-KR-Wavenet-C, 100만자/월 영구 무료",
+  typecast:   "TYPECAST — 고자연스러운 한국어 TTS · API 키 탭에서 등록, extra에 voice_id 입력",
+  elevenlabs: "ElevenLabs — 다국어 고품질, 상업용 $5/월부터",
+  polly:      "AWS Polly — SDK 설치 필요 (현재 미지원)",
 };
 
 type AiSettings = {
