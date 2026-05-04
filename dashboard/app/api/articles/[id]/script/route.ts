@@ -49,6 +49,18 @@ function parseOutput(raw: string): { title: string; script: string } {
 }
 
 function buildPrompt(article: Record<string, string>, requirements?: string) {
+  const articleType = article.article_type ?? "news";
+
+  if (articleType === "community") {
+    return buildCommunityPrompt(article, requirements);
+  }
+  if (articleType === "foreign") {
+    return buildForeignPrompt(article, requirements);
+  }
+  return buildNewsPrompt(article, requirements);
+}
+
+function buildNewsPrompt(article: Record<string, string>, requirements?: string) {
   return `당신은 유튜브 쇼츠 전문 스크립트 작가입니다. 한국 40~60대 남성 타겟, 방산/군사/시사 채널입니다.
 
 아래 기사/게시글을 바탕으로 정확히 60초짜리 숏츠 스크립트를 작성해주세요.
@@ -92,6 +104,100 @@ function buildPrompt(article: Record<string, string>, requirements?: string) {
 출처: ${article.source}
 내용: ${article.description || article.title}
 ${requirements ? `\n추가 요구사항: ${requirements}` : ""}`;
+}
+
+function buildCommunityPrompt(article: Record<string, string>, requirements?: string) {
+  // 선택된 이미지 개수
+  let imageCount = 0;
+  try {
+    const imgs = JSON.parse(article.community_images ?? "[]");
+    imageCount = imgs.filter((img: { selected: boolean }) => img.selected).length;
+  } catch { /* empty */ }
+
+  return `당신은 유튜브 쇼츠 전문 스크립트 작가입니다. 커뮤니티 이미지 기반 쇼츠 채널입니다.
+
+아래 커뮤니티 게시글(이미지 ${imageCount}장 포함)을 바탕으로 60초짜리 숏츠 나레이션 스크립트를 작성해주세요.
+
+**분량 기준:**
+- 한국어 TTS 낭독 속도: 초당 약 5~6자
+- 60초 = 발화 텍스트 기준 **300~360자** (공백·줄바꿈·[태그] 제외)
+- 줄 수 기준: 최소 12줄 이상
+
+**구조:**
+- [훅] 2~3줄: 이 게시글이 왜 재밌는지 첫 문장으로 잡아끌기
+- [본문] 8~10줄: 게시글 내용 소개 → 재밌는 포인트 → 반응/댓글 언급
+- [마무리] 2~3줄: 공감 유발 + 댓글 유도 ("여러분은 어떻게 생각하세요?")
+- 각 줄은 자막 1개 = 15~20자 이내 짧은 문장
+- **쉼표(,)와 마침표(.) 사용 금지** — 대신 줄바꿈으로 끊을 것
+- 느낌표(!)와 물음표(?)는 허용
+- 톤: 친근하고 재밌게, 유머 코드 포함
+
+**제목 작성 규칙:**
+- 궁금증·재미·공감을 유발하는 25자 이내 제목
+- 해시태그 없이
+
+**출력 형식 (태그 포함, [제목]이 가장 먼저):**
+[제목]
+(유튜브 숏츠 제목 한 줄)
+
+[훅]
+(2~3줄)
+
+[본문]
+(8~10줄)
+
+[마무리]
+(2~3줄)
+
+---
+게시글 제목: ${article.title}
+출처: ${article.source}
+${article.description ? `내용: ${article.description}` : ""}
+선택된 이미지 수: ${imageCount}장
+${requirements ? `\n추가 요구사항: ${requirements}` : ""}`;
+}
+
+function buildForeignPrompt(article: Record<string, string>, requirements?: string) {
+  return `당신은 유튜브 쇼츠 전문 스크립트 작가입니다. 해외 바이럴 영상을 한국 시청자에게 소개하는 번안 채널입니다.
+
+아래 해외 영상을 한국 시청자용 60초 숏츠로 재편집하는 나레이션 스크립트를 작성해주세요.
+
+**분량 기준:**
+- 한국어 TTS 낭독 속도: 초당 약 5~6자
+- 60초 = 발화 텍스트 기준 **300~360자** (공백·줄바꿈·[태그] 제외)
+- 줄 수 기준: 최소 12줄 이상
+
+**구조:**
+- [훅] 2~3줄: 한국 시청자 기준으로 왜 놀랍고 흥미로운지 첫 문장으로 잡아끌기
+- [본문] 8~10줄: 영상 내용 소개 → 핵심 장면 설명 → 한국과의 비교/연결점
+- [마무리] 2~3줄: 공감/놀라움 유발 + 댓글 유도
+- 각 줄은 자막 1개 = 15~20자 이내 짧은 문장
+- **쉼표(,)와 마침표(.) 사용 금지** — 대신 줄바꿈으로 끊을 것
+- 느낌표(!)와 물음표(?)는 허용
+- 톤: 신기하고 흥미롭게, 한국 시청자 공감 코드
+
+**제목 작성 규칙:**
+- 궁금증·놀라움·비교를 유발하는 25자 이내 제목
+- 해시태그 없이
+
+**출력 형식 (태그 포함, [제목]이 가장 먼저):**
+[제목]
+(유튜브 숏츠 제목 한 줄)
+
+[훅]
+(2~3줄)
+
+[본문]
+(8~10줄)
+
+[마무리]
+(2~3줄)
+
+---
+원본 영상 제목: ${article.title}
+출처: ${article.source}
+영상 설명: ${article.description || "없음"}
+${requirements ? `\n시청자 제공 핵심 포인트: ${requirements}` : ""}`;
 }
 
 async function callAI(provider: string, model: string, prompt: string): Promise<string> {

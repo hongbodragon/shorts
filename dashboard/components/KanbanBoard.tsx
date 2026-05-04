@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { ExternalLink, Trash2, CheckCircle, RefreshCw, MessageCircle, Eye } from "lucide-react";
+import { ExternalLink, Trash2, CheckCircle, RefreshCw, MessageCircle, Eye, Plus, Globe, Loader2 } from "lucide-react";
 import ArticleModal from "./ArticleModal";
 
 const STAGES = [
@@ -29,10 +29,40 @@ type Article = {
   is_ab_test: number;
 };
 
-export default function KanbanBoard({ categoryId }: { categoryId: number }) {
+const REGIONS = [
+  { code: "US", label: "🇺🇸 미국" }, { code: "JP", label: "🇯🇵 일본" },
+  { code: "GB", label: "🇬🇧 영국" }, { code: "FR", label: "🇫🇷 프랑스" },
+  { code: "DE", label: "🇩🇪 독일" }, { code: "IN", label: "🇮🇳 인도" },
+  { code: "AU", label: "🇦🇺 호주" }, { code: "CA", label: "🇨🇦 캐나다" },
+  { code: "BR", label: "🇧🇷 브라질" },
+];
+
+type TrendingVideo = {
+  videoId: string; title: string; thumbnail: string;
+  channelTitle: string; viewCount: number; duration: number;
+  description: string;
+};
+
+export default function KanbanBoard({ categoryId, categorySlug }: { categoryId: number; categorySlug?: string }) {
   const [grouped, setGrouped] = useState<Record<string, Article[]>>({});
   const [loading, setLoading] = useState(true);
   const [openArticleId, setOpenArticleId] = useState<number | null>(null);
+
+  // 커뮤니티 URL 입력
+  const [urlInput, setUrlInput] = useState("");
+  const [urlAdding, setUrlAdding] = useState(false);
+  const [urlError, setUrlError] = useState("");
+
+  // 번안 급상승
+  const [showTrending, setShowTrending] = useState(false);
+  const [trendingRegion, setTrendingRegion] = useState("US");
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingVideos, setTrendingVideos] = useState<TrendingVideo[]>([]);
+  const [trendingError, setTrendingError] = useState("");
+  const [addingVideoId, setAddingVideoId] = useState<string | null>(null);
+
+  const isCommunity = categorySlug === "community";
+  const isForeign = categorySlug === "foreign";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,9 +83,80 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
     load();
   };
 
+  const deleteArticle = async (articleId: number) => {
+    if (!confirm("완전히 삭제합니다. 복구할 수 없습니다. 계속할까요?")) return;
+    await fetch(`/api/articles/${articleId}`, { method: "DELETE" });
+    load();
+  };
+
+  const addByUrl = async () => {
+    if (!urlInput.trim()) return;
+    setUrlAdding(true);
+    setUrlError("");
+    try {
+      const res = await fetch("/api/articles/parse-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlInput.trim(), categoryId, articleType: "community" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setUrlInput("");
+      load();
+    } catch (e: unknown) {
+      setUrlError(e instanceof Error ? e.message : "오류");
+    } finally {
+      setUrlAdding(false);
+    }
+  };
+
+  const loadTrending = async () => {
+    setTrendingLoading(true);
+    setTrendingError("");
+    setTrendingVideos([]);
+    try {
+      const res = await fetch(`/api/youtube/trending?regionCode=${trendingRegion}&maxResults=20`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setTrendingVideos(data.items ?? []);
+    } catch (e: unknown) {
+      setTrendingError(e instanceof Error ? e.message : "오류");
+    } finally {
+      setTrendingLoading(false);
+    }
+  };
+
+  const addTrendingVideo = async (video: TrendingVideo) => {
+    setAddingVideoId(video.videoId);
+    try {
+      await fetch("/api/articles/parse-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${video.videoId}`,
+          categoryId,
+          articleType: "foreign",
+          title: video.title,
+          description: video.description,
+          thumbnail: video.thumbnail,
+          foreignVideoId: video.videoId,
+        }),
+      });
+      load();
+    } finally {
+      setAddingVideoId(null);
+    }
+  };
+
   if (loading) return <div className="p-8 text-center text-gray-400">불러오는 중...</div>;
 
   const totalArticles = Object.values(grouped).flat().length;
+
+  const formatDuration = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
 
   return (
     <div>
@@ -66,6 +167,97 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
           onStageChange={load}
         />
       )}
+
+      {/* 커뮤니티: URL 입력창 */}
+      {isCommunity && (
+        <div className="mb-4 flex flex-col gap-1">
+          <div className="flex gap-2">
+            <input
+              value={urlInput}
+              onChange={(e) => { setUrlInput(e.target.value); setUrlError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && addByUrl()}
+              placeholder="커뮤니티 글 URL 붙여넣기 (예: https://aagag.com/issue/?idx=...)"
+              className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            />
+            <button
+              onClick={addByUrl}
+              disabled={urlAdding || !urlInput.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+            >
+              {urlAdding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              추가
+            </button>
+          </div>
+          {urlError && <p className="text-red-500 text-xs">{urlError}</p>}
+        </div>
+      )}
+
+      {/* 번안/해외: 급상승 수집 */}
+      {isForeign && (
+        <div className="mb-4 space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            <select
+              value={trendingRegion}
+              onChange={(e) => setTrendingRegion(e.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm"
+            >
+              {REGIONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+            </select>
+            <button
+              onClick={() => { setShowTrending(true); loadTrending(); }}
+              disabled={trendingLoading}
+              className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+            >
+              {trendingLoading ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
+              해외 급상승 가져오기
+            </button>
+          </div>
+
+          {trendingError && <p className="text-red-500 text-sm">{trendingError}</p>}
+
+          {showTrending && trendingVideos.length > 0 && (
+            <div className="border rounded-xl overflow-hidden bg-white">
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b">
+                <span className="text-sm font-semibold text-gray-700">
+                  {REGIONS.find(r => r.code === trendingRegion)?.label} 급상승 {trendingVideos.length}개
+                </span>
+                <button onClick={() => setShowTrending(false)} className="text-xs text-gray-400 hover:text-gray-700">닫기</button>
+              </div>
+              <div className="max-h-96 overflow-y-auto divide-y">
+                {trendingVideos.map((v) => (
+                  <div key={v.videoId} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50">
+                    <img src={v.thumbnail} alt="" className="w-20 h-12 object-cover rounded flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 line-clamp-1">{v.title}</p>
+                      <p className="text-[11px] text-gray-400">
+                        {v.channelTitle} · 조회 {(v.viewCount / 10000).toFixed(0)}만 · {formatDuration(v.duration)}
+                      </p>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <a
+                        href={`https://youtube.com/watch?v=${v.videoId}`}
+                        target="_blank" rel="noreferrer"
+                        className="p-1.5 text-gray-400 hover:text-blue-600"
+                      >
+                        <ExternalLink size={13} />
+                      </a>
+                      <button
+                        onClick={() => addTrendingVideo(v)}
+                        disabled={addingVideoId === v.videoId}
+                        className="flex items-center gap-1 px-2 py-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded text-xs"
+                      >
+                        {addingVideoId === v.videoId ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+                        추가
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm text-gray-500">전체 {totalArticles}건</span>
         <button onClick={load} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800">
@@ -93,6 +285,7 @@ export default function KanbanBoard({ categoryId }: { categoryId: number }) {
                     currentStage={key}
                     onMove={moveStage}
                     onOpen={() => setOpenArticleId(a.id)}
+                    onDelete={deleteArticle}
                   />
                 ))}
                 {articles.length === 0 && (
@@ -112,11 +305,13 @@ function ArticleCard({
   currentStage,
   onMove,
   onOpen,
+  onDelete,
 }: {
   article: Article;
   currentStage: string;
   onMove: (id: number, stage: string) => void;
   onOpen: () => void;
+  onDelete: (id: number) => void;
 }) {
   const stageKeys = STAGES.map((s) => s.key);
   const currentIdx = stageKeys.indexOf(currentStage);
@@ -177,12 +372,20 @@ function ArticleCard({
             <CheckCircle size={11} /> 승인
           </button>
         )}
-        {currentStage === "collected" && (
+        {!isTrash && (
           <button
             onClick={() => onMove(article.id, "trash")}
             className="p-1 rounded bg-red-50 hover:bg-red-100 text-red-400"
           >
             <Trash2 size={11} />
+          </button>
+        )}
+        {isTrash && (
+          <button
+            onClick={() => onDelete(article.id)}
+            className="flex-1 flex items-center justify-center gap-1 py-1 rounded bg-red-500 hover:bg-red-600 text-white text-[11px] font-medium"
+          >
+            <Trash2 size={11} /> 완전 삭제
           </button>
         )}
       </div>

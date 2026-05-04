@@ -16,11 +16,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json(row);
 }
 
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const db = getDb();
+  db.prepare("DELETE FROM workflow_state WHERE article_id = ?").run(Number(id));
+  db.prepare("DELETE FROM articles WHERE id = ?").run(Number(id));
+  return NextResponse.json({ ok: true });
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json();
   const db = getDb();
-  const allowed = ["shorts_title", "script", "script_requirements", "tts_path", "image_paths", "impact_subtitles", "youtube_video_id", "youtube_stats"];
+  const allowed = ["shorts_title", "script", "script_requirements", "tts_path", "image_paths", "impact_subtitles", "youtube_video_id", "youtube_stats", "community_images", "article_type", "foreign_video_id", "foreign_video_clips"];
 
   for (const key of allowed) {
     if (key in body) {

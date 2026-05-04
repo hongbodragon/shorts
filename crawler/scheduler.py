@@ -12,38 +12,32 @@ def _get_defense_category_id() -> int:
 
 
 def crawl_communities():
-    """다모앙 + 밀리돔 크롤링."""
+    """다모앙 크롤링 (밀리돔 제외)."""
     from sources.damoang import run as damoang_run
-    from sources.milidom import run as milidom_run
 
     category_id = _get_defense_category_id()
 
     damoang_hot = damoang_run(category_id)
-    milidom_hot = milidom_run(category_id)
 
-    total_hot = len(damoang_hot) + len(milidom_hot)
-    if total_hot:
-        print(f"  → 핫 콘텐츠 총 {total_hot}건 (다모앙 {len(damoang_hot)}, 밀리돔 {len(milidom_hot)})")
+    if damoang_hot:
+        print(f"  → 핫 콘텐츠 총 {len(damoang_hot)}건 (다모앙)")
 
-    return {"damoang": damoang_hot, "milidom": milidom_hot}
+    return {"damoang": damoang_hot}
 
 
 def check_hot_and_alert():
     """핫 콘텐츠 → 텔레그램 알람."""
-    from metrics import get_hot_community_posts, get_hot_milidom_articles
+    from metrics import get_hot_community_posts
     from alert import send_alert
 
-    print("[핫 체크] 다모앙/밀리돔 핫 콘텐츠 확인 중...")
+    print("[핫 체크] 다모앙 핫 콘텐츠 확인 중...")
     hot_posts = get_hot_community_posts()
-    hot_articles = get_hot_milidom_articles()
 
-    if not hot_posts and not hot_articles:
+    if not hot_posts:
         print("  → 새로운 핫 콘텐츠 없음")
         return
 
-    triggered = []
-    triggered.extend([{"type": "community", "item": p} for p in hot_posts])
-    triggered.extend([{"type": "article", "item": a} for a in hot_articles])
+    triggered = [{"type": "community", "item": p} for p in hot_posts]
 
     print(f"  → {len(triggered)}건 핫 콘텐츠 알람 전송")
     send_alert(triggered)
@@ -52,8 +46,6 @@ def check_hot_and_alert():
     conn = get_conn()
     for p in hot_posts:
         conn.execute("UPDATE community_posts SET alerted_at=datetime('now','localtime') WHERE id=?", (p["id"],))
-    for a in hot_articles:
-        conn.execute("UPDATE articles SET alerted_at=datetime('now','localtime') WHERE id=?", (a["id"],))
     conn.commit()
     conn.close()
 

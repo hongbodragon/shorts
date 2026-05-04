@@ -7,14 +7,27 @@ type Category = { id: number; name: string; slug: string };
 export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<number>(0);
+  const [catError, setCatError] = useState<string | null>(null);
+  const [catLoading, setCatLoading] = useState(true);
 
   useEffect(() => {
+    setCatLoading(true);
     fetch("/api/categories")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data: Category[]) => {
+        if (!Array.isArray(data)) throw new Error("서버 응답이 배열이 아닙니다");
         setCategories(data);
         if (data.length > 0) setActiveCat(data[0].id);
-      });
+        setCatError(null);
+      })
+      .catch((e: Error) => {
+        console.error("카테고리 로드 실패:", e);
+        setCatError(e.message);
+      })
+      .finally(() => setCatLoading(false));
   }, []);
 
   return (
@@ -45,7 +58,29 @@ export default function Home() {
         </div>
       </header>
       <div className="max-w-screen-2xl mx-auto px-6 py-6">
-        {activeCat > 0 && <KanbanBoard categoryId={activeCat} />}
+        {catLoading && (
+          <div className="p-8 text-center text-gray-400">카테고리 불러오는 중…</div>
+        )}
+        {!catLoading && catError && (
+          <div className="p-8 text-center text-red-500">
+            카테고리 로드 실패: {catError}
+            <br />
+            <span className="text-xs text-gray-400">
+              서버 콘솔에서 DB 에러 확인 후 새로고침 해주세요.
+            </span>
+          </div>
+        )}
+        {!catLoading && !catError && activeCat > 0 && (
+          <KanbanBoard
+            categoryId={activeCat}
+            categorySlug={categories.find((c) => c.id === activeCat)?.slug}
+          />
+        )}
+        {!catLoading && !catError && categories.length === 0 && (
+          <div className="p-8 text-center text-gray-400">
+            카테고리가 없습니다. DB 마이그레이션을 실행해주세요.
+          </div>
+        )}
       </div>
     </main>
   );

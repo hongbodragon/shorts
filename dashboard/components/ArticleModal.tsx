@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {
   X, ExternalLink, Wand2, RefreshCw, Play, Pause, Download,
   Image as ImageIcon, Mic, FileText, Eye, CheckCircle, ChevronRight,
-  MessageCircle, Loader2, AlignLeft, Maximize2
+  MessageCircle, Loader2, AlignLeft, Maximize2, Scissors, Search, Plus, Trash2
 } from "lucide-react";
 
 type YoutubeStats = {
@@ -12,6 +12,22 @@ type YoutubeStats = {
   comments: number;
   checked_at: string;
 };
+
+/**
+ * DB에 저장된 tts_path(Windows 절대경로)를 Next.js API URL로 변환합니다.
+ * 모바일 등 외부에서 접속해도 오디오 재생이 가능하도록 하기 위함입니다.
+ * 예: "D:\project\shorts\data\audio\article_1_xxx.mp3"
+ *   → "/api/articles/1/tts/audio?file=article_1_xxx.mp3"
+ */
+function ttsPathToApiUrl(ttsPath: string | null, articleId: number): string {
+  if (!ttsPath) return "";
+  // 이미 API 경로인 경우 (TTS 새로 생성 직후) 그대로 사용
+  if (ttsPath.startsWith("/api/")) return ttsPath;
+  // Windows/Unix 절대경로에서 파일명만 추출
+  const filename = ttsPath.split(/[\\/]/).pop() ?? "";
+  if (!filename) return "";
+  return `/api/articles/${articleId}/tts/audio?file=${encodeURIComponent(filename)}`;
+}
 
 type ArticleDetail = {
   id: number;
@@ -31,8 +47,15 @@ type ArticleDetail = {
   image_paths: string | null;
   impact_subtitles: string | null;
   youtube_video_id: string | null;
-  youtube_stats: string | null; // JSON string
+  youtube_stats: string | null;
+  article_type: string | null;       // 'news' | 'community' | 'foreign'
+  community_images: string | null;   // JSON: [{url, selected, order}]
+  foreign_video_id: string | null;
+  foreign_video_clips: string | null; // JSON: [{videoId, start, end, clipPath}]
 };
+
+type CommunityImage = { url: string; selected: boolean; order: number };
+type ForeignClip = { videoId: string; start: number; end: number; label?: string; clipPath?: string; filename?: string };
 
 const STAGE_LABELS: Record<string, string> = {
   collected: "수집됨", approved: "반응 좋음", scripting: "스크립트",
@@ -40,7 +63,7 @@ const STAGE_LABELS: Record<string, string> = {
   uploading: "업로드 완료", monitoring: "1시간 후 반응", done: "결과 정리", trash: "휴지통",
 };
 
-const TABS = [
+const BASE_TABS = [
   { key: "info",     label: "원문",   icon: FileText },
   { key: "script",   label: "스크립트", icon: AlignLeft },
   { key: "images",   label: "이미지",  icon: ImageIcon },
@@ -48,6 +71,20 @@ const TABS = [
   { key: "subtitle", label: "자막",   icon: AlignLeft },
   { key: "preview",  label: "미리보기", icon: Eye },
 ];
+
+function getTabs(articleType: string | null) {
+  if (articleType === "foreign") {
+    return [
+      { key: "info",     label: "원문",   icon: FileText },
+      { key: "script",   label: "스크립트", icon: AlignLeft },
+      { key: "clips",    label: "클립",   icon: Scissors },
+      { key: "tts",      label: "음성",   icon: Mic },
+      { key: "subtitle", label: "자막",   icon: AlignLeft },
+      { key: "preview",  label: "미리보기", icon: Eye },
+    ];
+  }
+  return BASE_TABS;
+}
 
 export default function ArticleModal({
   articleId,
@@ -107,6 +144,7 @@ export default function ArticleModal({
   const stageKeys = Object.keys(STAGE_LABELS);
   const stageIdx = stageKeys.indexOf(stage);
   const nextStage = stageKeys[stageIdx + 1];
+  const tabs = getTabs(article.article_type);
 
   return (
     <div
@@ -125,6 +163,11 @@ export default function ArticleModal({
               <span className="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
                 {STAGE_LABELS[stage]}
               </span>
+              {article.article_type && article.article_type !== "news" && (
+                <span className="text-[11px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-medium">
+                  {article.article_type === "community" ? "커뮤니티" : "번안/해외"}
+                </span>
+              )}
               {article.comment_cnt > 0 && (
                 <span className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${
                   article.comment_cnt >= 5 ? "bg-blue-500 text-white" : "bg-blue-100 text-blue-700"
@@ -150,7 +193,7 @@ export default function ArticleModal({
 
         {/* 탭 */}
         <div className="flex border-b overflow-x-auto">
-          {TABS.map(({ key, label, icon: Icon }) => (
+          {tabs.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -170,6 +213,7 @@ export default function ArticleModal({
           {tab === "info"     && <InfoTab article={article} />}
           {tab === "script"   && <ScriptTab article={article} onSave={save} />}
           {tab === "images"   && <ImagesTab article={article} onSave={save} />}
+          {tab === "clips"    && <ClipTab article={article} onSave={save} onReload={load} />}
           {tab === "tts"      && <TtsTab article={article} onSave={save} />}
           {tab === "subtitle" && <SubtitleTab article={article} />}
           {tab === "preview"  && <PreviewTab article={article} />}
@@ -272,6 +316,15 @@ function ScriptTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const isCommunity = article.article_type === "community";
+  const isForeign = article.article_type === "foreign";
+
+  // 커뮤니티: 선택된 이미지 목록
+  const communityImages: CommunityImage[] = (() => {
+    try { return article.community_images ? JSON.parse(article.community_images) : []; } catch { return []; }
+  })();
+  const selectedImages = communityImages.filter((img) => img.selected).sort((a, b) => a.order - b.order);
+
   const generate = async () => {
     setLoading(true);
     setError("");
@@ -297,6 +350,47 @@ function ScriptTab({
 
   return (
     <div className="p-5 space-y-4">
+      {/* 커뮤니티: 선택된 이미지 목록 표시 */}
+      {isCommunity && selectedImages.length > 0 && (
+        <div>
+          <Label>선택된 이미지 ({selectedImages.length}장)</Label>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {selectedImages.map((img, i) => (
+              <div key={img.url} className="flex-shrink-0 relative">
+                <img src={img.url} alt={`이미지 ${i + 1}`} className="w-16 h-24 object-cover rounded-lg border" />
+                <span className="absolute top-1 left-1 bg-blue-600 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                  {i + 1}
+                </span>
+              </div>
+            ))}
+          </div>
+          {selectedImages.length === 0 && (
+            <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
+              이미지 탭에서 먼저 이미지를 선택해주세요.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* 번안: 원본 영상 정보 */}
+      {isForeign && article.foreign_video_id && (
+        <div className="bg-gray-50 rounded-xl p-3 border">
+          <Label>원본 영상</Label>
+          <a
+            href={`https://www.youtube.com/watch?v=${article.foreign_video_id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 text-blue-600 hover:underline text-sm"
+          >
+            <ExternalLink size={12} />
+            youtube.com/watch?v={article.foreign_video_id}
+          </a>
+          {article.description && (
+            <p className="text-xs text-gray-600 mt-2 leading-relaxed line-clamp-3">{article.description}</p>
+          )}
+        </div>
+      )}
+
       <div>
         <Label>숏츠 제목 <span className="text-gray-400 font-normal">(클릭 후 편집)</span></Label>
         <input
@@ -308,13 +402,18 @@ function ScriptTab({
       </div>
 
       <div>
-        <Label>추가 요구사항 <span className="text-gray-400 font-normal">(선택)</span></Label>
+        <Label>
+          {isForeign ? "원본 영상 핵심 포인트 (시청 후 입력)" : "추가 요구사항"}
+          <span className="text-gray-400 font-normal ml-1">(선택)</span>
+        </Label>
         <textarea
           value={requirements}
           onChange={(e) => setRequirements(e.target.value)}
-          rows={2}
+          rows={isForeign ? 4 : 2}
           className="w-full border rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
-          placeholder="예) 더 자극적인 훅으로, 마지막에 다음 영상 예고 추가, 전문 용어 줄이기..."
+          placeholder={isForeign
+            ? "예) 주인공이 사자에게 쫓기는 장면, 결말에서 의외의 반전, 한국 시청자에게 흥미로운 점..."
+            : "예) 더 자극적인 훅으로, 마지막에 다음 영상 예고 추가, 전문 용어 줄이기..."}
         />
       </div>
 
@@ -325,7 +424,7 @@ function ScriptTab({
           className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-          {script ? "재생성" : "스크립트 생성"}
+          {script ? "재생성" : isForeign ? "한국어 숏츠 초안 작성" : isCommunity ? "AI 스크립트 초안" : "스크립트 생성"}
         </button>
         {script && (
           <button
@@ -339,6 +438,20 @@ function ScriptTab({
 
       {error && <p className="text-red-500 text-sm bg-red-50 p-3 rounded-lg">{error}</p>}
 
+      {/* 커뮤니티: 처음부터 스크립트 직접 입력 가능 */}
+      {isCommunity && !script && (
+        <div>
+          <Label>스크립트 직접 입력 <span className="text-gray-400 font-normal">(또는 위 AI 초안 사용)</span></Label>
+          <textarea
+            value={script}
+            onChange={(e) => setScript(e.target.value)}
+            rows={12}
+            className="w-full border rounded-lg px-3 py-2 text-sm text-gray-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none font-mono"
+            placeholder="스크립트를 직접 입력하거나 AI 초안 버튼을 눌러주세요."
+          />
+        </div>
+      )}
+
       {script && (
         <div>
           <Label>스크립트 <span className="text-gray-400 font-normal">(직접 편집 가능)</span></Label>
@@ -349,7 +462,6 @@ function ScriptTab({
             className="w-full border rounded-lg px-3 py-2 text-sm text-gray-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none font-mono"
           />
           {(() => {
-            // [태그], 공백, 줄바꿈 제외한 실제 발화 글자수
             const spoken = script.replace(/\[.*?\]/g, "").replace(/\s/g, "").length;
             const secs = Math.round(spoken / 5.5);
             const color = secs < 45 ? "text-red-500" : secs > 70 ? "text-amber-500" : "text-green-600";
@@ -388,6 +500,11 @@ function ImagesTab({
   article: ArticleDetail;
   onSave: (fields: Partial<ArticleDetail>) => Promise<void>;
 }) {
+  // 커뮤니티 타입: 이미지 선별 UI
+  if (article.article_type === "community") {
+    return <CommunityImagesTab article={article} onSave={onSave} />;
+  }
+
   const saved: string[] = (() => {
     try { return article.image_paths ? JSON.parse(article.image_paths) : []; } catch { return []; }
   })();
@@ -553,6 +670,362 @@ function ImageSlot({
   );
 }
 
+/* ────────────── 커뮤니티 이미지 선별 탭 ────────────── */
+function CommunityImagesTab({
+  article,
+  onSave,
+}: {
+  article: ArticleDetail;
+  onSave: (fields: Partial<ArticleDetail>) => Promise<void>;
+}) {
+  const [images, setImages] = useState<CommunityImage[]>(() => {
+    try { return article.community_images ? JSON.parse(article.community_images) : []; } catch { return []; }
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const selectedCount = images.filter((img) => img.selected).length;
+
+  const toggle = (idx: number) => {
+    setImages((prev) => {
+      const next = [...prev];
+      if (next[idx].selected) {
+        // 선택 해제: order 재정렬
+        const removedOrder = next[idx].order;
+        next[idx] = { ...next[idx], selected: false, order: 0 };
+        next.forEach((img, i) => {
+          if (img.selected && img.order > removedOrder) {
+            next[i] = { ...img, order: img.order - 1 };
+          }
+        });
+      } else {
+        // 선택: order = 현재 선택 수 + 1
+        const maxOrder = next.filter((img) => img.selected).length + 1;
+        next[idx] = { ...next[idx], selected: true, order: maxOrder };
+      }
+      return next;
+    });
+    setSaved(false);
+  };
+
+  const confirm = async () => {
+    setSaving(true);
+    try {
+      const selectedUrls = images
+        .filter((img) => img.selected)
+        .sort((a, b) => a.order - b.order)
+        .map((img) => img.url);
+      await onSave({
+        community_images: JSON.stringify(images),
+        image_paths: JSON.stringify(selectedUrls),
+      });
+      setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (images.length === 0) {
+    return (
+      <div className="p-5 text-center text-gray-400 py-12">
+        <ImageIcon size={32} className="mx-auto mb-3 opacity-30" />
+        <p className="text-sm">수집된 이미지가 없습니다.</p>
+        <p className="text-xs mt-1">URL을 다시 추가하거나 원문 페이지를 확인해주세요.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <Label>이미지 선별</Label>
+          <p className="text-xs text-gray-400">클릭으로 선택 · 번호 순서대로 영상에 사용됨 · {images.length}장 수집</p>
+        </div>
+        <button
+          onClick={confirm}
+          disabled={saving || selectedCount === 0}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+        >
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+          선택 완료 ({selectedCount}장)
+        </button>
+      </div>
+
+      {saved && (
+        <p className="text-green-600 text-sm bg-green-50 p-3 rounded-lg">
+          ✓ {selectedCount}장 선택 완료 — 스크립트 탭으로 이동하세요.
+        </p>
+      )}
+
+      <div className="grid grid-cols-3 gap-2">
+        {images.map((img, idx) => (
+          <button
+            key={img.url}
+            onClick={() => toggle(idx)}
+            className={`relative aspect-[3/4] rounded-lg overflow-hidden border-2 transition-all ${
+              img.selected
+                ? "border-blue-500 shadow-md"
+                : "border-gray-200 hover:border-gray-400"
+            }`}
+          >
+            <img
+              src={img.url}
+              alt={`이미지 ${idx + 1}`}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='133' viewBox='0 0 100 133'%3E%3Crect width='100' height='133' fill='%23e5e7eb'/%3E%3Ctext x='50' y='70' text-anchor='middle' fill='%239ca3af' font-size='12'%3E오류%3C/text%3E%3C/svg%3E";
+              }}
+            />
+            {img.selected && (
+              <div className="absolute inset-0 bg-blue-500/20" />
+            )}
+            {img.selected && (
+              <span className="absolute top-1 left-1 bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center shadow">
+                {img.order}
+              </span>
+            )}
+            {!img.selected && (
+              <span className="absolute top-1 right-1 bg-black/30 text-white text-[10px] px-1 rounded">
+                {idx + 1}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ────────────── 번안/해외 클립 탭 ────────────── */
+function ClipTab({
+  article,
+  onSave,
+  onReload,
+}: {
+  article: ArticleDetail;
+  onSave: (fields: Partial<ArticleDetail>) => Promise<void>;
+  onReload: () => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<{videoId: string; title: string; channelTitle: string; thumbnail: string}[]>([]);
+  const [searchError, setSearchError] = useState("");
+
+  const [selectedVideo, setSelectedVideo] = useState<{videoId: string; title: string} | null>(null);
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+
+  const clips: ForeignClip[] = (() => {
+    try { return article.foreign_video_clips ? JSON.parse(article.foreign_video_clips) : []; } catch { return []; }
+  })();
+
+  const search = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError("");
+    try {
+      const res = await fetch(`/api/youtube/search?q=${encodeURIComponent(searchQuery)}&cc=true`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "검색 오류");
+      setSearchResults(data);
+    } catch (e: unknown) {
+      setSearchError(e instanceof Error ? e.message : "오류");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const downloadClip = async () => {
+    if (!selectedVideo) return;
+    const start = parseInt(startTime);
+    const end = parseInt(endTime);
+    if (isNaN(start) || isNaN(end) || end <= start) {
+      setDownloadError("시작/종료 시간을 올바르게 입력해주세요. (초 단위, 종료 > 시작)");
+      return;
+    }
+    setDownloading(true);
+    setDownloadError("");
+    try {
+      const res = await fetch("/api/youtube/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoId: selectedVideo.videoId,
+          start,
+          end,
+          articleId: article.id,
+          clipIdx: clips.length,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "다운로드 오류");
+      setSelectedVideo(null);
+      setStartTime("");
+      setEndTime("");
+      onReload();
+    } catch (e: unknown) {
+      setDownloadError(e instanceof Error ? e.message : "오류");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const removeClip = async (idx: number) => {
+    const next = clips.filter((_, i) => i !== idx);
+    await onSave({ foreign_video_clips: JSON.stringify(next) });
+    onReload();
+  };
+
+  return (
+    <div className="p-5 space-y-5">
+      {/* 추가된 클립 목록 */}
+      {clips.length > 0 && (
+        <div>
+          <Label>추가된 클립 ({clips.length}개)</Label>
+          <div className="space-y-2">
+            {clips.map((clip, i) => (
+              <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 border rounded-lg">
+                <img
+                  src={`https://img.youtube.com/vi/${clip.videoId}/mqdefault.jpg`}
+                  alt={`클립 ${i + 1}`}
+                  className="w-20 h-12 object-cover rounded flex-shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">클립 {i + 1}</p>
+                  <p className="text-xs text-gray-500">{clip.start}초 ~ {clip.end}초 ({clip.end - clip.start}초)</p>
+                  {clip.filename && <p className="text-[10px] text-gray-400 truncate">{clip.filename}</p>}
+                </div>
+                <a
+                  href={`https://www.youtube.com/watch?v=${clip.videoId}&t=${clip.start}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-500 hover:text-blue-700 flex-shrink-0"
+                >
+                  <ExternalLink size={14} />
+                </a>
+                <button
+                  onClick={() => removeClip(i)}
+                  className="text-red-400 hover:text-red-600 flex-shrink-0"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* CC 영상 검색 */}
+      <div>
+        <Label>CC(크리에이티브 커먼즈) 영상 검색</Label>
+        <div className="flex gap-2">
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && search()}
+            placeholder="검색어 입력 (영어 권장)"
+            className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          />
+          <button
+            onClick={search}
+            disabled={searching || !searchQuery.trim()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+          >
+            {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+            검색
+          </button>
+        </div>
+        {searchError && <p className="text-red-500 text-xs mt-2 bg-red-50 p-2 rounded">{searchError}</p>}
+      </div>
+
+      {/* 검색 결과 */}
+      {searchResults.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400">클릭하여 클립 추가할 영상 선택</p>
+          {searchResults.map((video) => (
+            <button
+              key={video.videoId}
+              onClick={() => setSelectedVideo({ videoId: video.videoId, title: video.title })}
+              className={`w-full flex items-center gap-3 p-2 rounded-lg border text-left transition-colors ${
+                selectedVideo?.videoId === video.videoId
+                  ? "border-blue-500 bg-blue-50"
+                  : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+              }`}
+            >
+              <img src={video.thumbnail} alt={video.title} className="w-20 h-12 object-cover rounded flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-800 line-clamp-2 leading-snug">{video.title}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{video.channelTitle}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 클립 시간 지정 */}
+      {selectedVideo && (
+        <div className="border rounded-xl p-4 space-y-3 bg-blue-50/40">
+          <Label>클립 시간 지정</Label>
+          <p className="text-sm font-medium text-gray-800 truncate">{selectedVideo.title}</p>
+          <a
+            href={`https://www.youtube.com/watch?v=${selectedVideo.videoId}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 text-blue-600 hover:underline text-xs"
+          >
+            <ExternalLink size={11} /> YouTube에서 시청하기 (시간 확인)
+          </a>
+          <div className="flex gap-3 items-center">
+            <div className="flex-1">
+              <label className="text-xs text-gray-500 font-medium">시작 (초)</label>
+              <input
+                type="number"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                placeholder="예) 30"
+                className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="text-xs text-gray-500 font-medium">종료 (초)</label>
+              <input
+                type="number"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                placeholder="예) 90"
+                className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+          {startTime && endTime && parseInt(endTime) > parseInt(startTime) && (
+            <p className="text-xs text-gray-500">클립 길이: {parseInt(endTime) - parseInt(startTime)}초</p>
+          )}
+          {downloadError && <p className="text-red-500 text-xs bg-red-50 p-2 rounded">{downloadError}</p>}
+          <button
+            onClick={downloadClip}
+            disabled={downloading}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+          >
+            {downloading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            {downloading ? "다운로드 중... (수분 소요)" : "클립 추가"}
+          </button>
+        </div>
+      )}
+
+      {clips.length === 0 && searchResults.length === 0 && (
+        <div className="text-center py-8 text-gray-400">
+          <Scissors size={32} className="mx-auto mb-3 opacity-30" />
+          <p className="text-sm">CC 영상을 검색하여 클립을 추가하세요.</p>
+          <p className="text-xs mt-1">추가된 클립은 영상 합성 시 사용됩니다.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ────────────── 음성(TTS) 탭 ────────────── */
 function TtsTab({
   article,
@@ -562,7 +1035,8 @@ function TtsTab({
   onSave: (fields: Partial<ArticleDetail>) => Promise<void>;
 }) {
   const [loading, setLoading] = useState(false);
-  const [audioUrl, setAudioUrl] = useState(article.tts_path ?? "");
+  // tts_path는 DB에 Windows 절대경로로 저장됨 → API URL로 변환해야 모바일에서도 재생 가능
+  const [audioUrl, setAudioUrl] = useState(() => ttsPathToApiUrl(article.tts_path, article.id));
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState("");
   const audioRef = useRef<HTMLAudioElement>(null);
