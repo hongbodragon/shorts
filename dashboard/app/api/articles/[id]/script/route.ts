@@ -107,16 +107,17 @@ ${requirements ? `\n추가 요구사항: ${requirements}` : ""}`;
 }
 
 function buildCommunityPrompt(article: Record<string, string>, requirements?: string) {
-  // 선택된 이미지 개수
-  let imageCount = 0;
+  // 추가된 클립 수
+  let clipCount = 0;
   try {
-    const imgs = JSON.parse(article.community_images ?? "[]");
-    imageCount = imgs.filter((img: { selected: boolean }) => img.selected).length;
+    const clips = JSON.parse(article.foreign_video_clips ?? "[]");
+    clipCount = clips.length;
   } catch { /* empty */ }
 
-  return `당신은 유튜브 쇼츠 전문 스크립트 작가입니다. 커뮤니티 이미지 기반 쇼츠 채널입니다.
+  return `당신은 유튜브 쇼츠 전문 스크립트 작가입니다. 해외 바이럴 영상 클립을 사용한 한국어 나레이션 쇼츠 채널입니다.
 
-아래 커뮤니티 게시글(이미지 ${imageCount}장 포함)을 바탕으로 60초짜리 숏츠 나레이션 스크립트를 작성해주세요.
+아래 주제에 맞는 60초짜리 나레이션 스크립트를 작성해주세요.
+영상 클립은 별도로 준비되어 있으며 나레이션은 영상 위에 자막+TTS로 입혀집니다.
 
 **분량 기준:**
 - 한국어 TTS 낭독 속도: 초당 약 5~6자
@@ -124,16 +125,16 @@ function buildCommunityPrompt(article: Record<string, string>, requirements?: st
 - 줄 수 기준: 최소 12줄 이상
 
 **구조:**
-- [훅] 2~3줄: 이 게시글이 왜 재밌는지 첫 문장으로 잡아끌기
-- [본문] 8~10줄: 게시글 내용 소개 → 재밌는 포인트 → 반응/댓글 언급
-- [마무리] 2~3줄: 공감 유발 + 댓글 유도 ("여러분은 어떻게 생각하세요?")
+- [훅] 2~3줄: 왜 이 영상이 놀랍고 재밌는지 첫 문장으로 잡아끌기 (숫자·의문·반전 활용)
+- [본문] 8~10줄: 영상 내용 설명 → 핵심 장면 묘사 → 반응·상황 해설 → 한국과 비교/공감 포인트
+- [마무리] 2~3줄: 공감/놀라움 유발 + 댓글 유도 ("여러분은 이런 상황 어떻게 하실 것 같아요?")
 - 각 줄은 자막 1개 = 15~20자 이내 짧은 문장
 - **쉼표(,)와 마침표(.) 사용 금지** — 대신 줄바꿈으로 끊을 것
 - 느낌표(!)와 물음표(?)는 허용
-- 톤: 친근하고 재밌게, 유머 코드 포함
+- 톤: 친근하고 신기하게, 유머와 놀라움 코드
 
 **제목 작성 규칙:**
-- 궁금증·재미·공감을 유발하는 25자 이내 제목
+- 궁금증·놀라움을 유발하는 25자 이내 제목
 - 해시태그 없이
 
 **출력 형식 (태그 포함, [제목]이 가장 먼저):**
@@ -150,11 +151,9 @@ function buildCommunityPrompt(article: Record<string, string>, requirements?: st
 (2~3줄)
 
 ---
-게시글 제목: ${article.title}
-출처: ${article.source}
-${article.description ? `내용: ${article.description}` : ""}
-선택된 이미지 수: ${imageCount}장
-${requirements ? `\n추가 요구사항: ${requirements}` : ""}`;
+주제: ${article.title}
+준비된 클립 수: ${clipCount}개
+${requirements ? `\n추가 포인트: ${requirements}` : ""}`;
 }
 
 function buildForeignPrompt(article: Record<string, string>, requirements?: string) {

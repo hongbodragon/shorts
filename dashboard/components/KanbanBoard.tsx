@@ -94,10 +94,10 @@ export default function KanbanBoard({ categoryId, categorySlug }: { categoryId: 
     setUrlAdding(true);
     setUrlError("");
     try {
-      const res = await fetch("/api/articles/parse-url", {
+      const res = await fetch("/api/articles/create-topic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlInput.trim(), categoryId, articleType: "community" }),
+        body: JSON.stringify({ title: urlInput.trim(), categoryId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -168,7 +168,7 @@ export default function KanbanBoard({ categoryId, categorySlug }: { categoryId: 
         />
       )}
 
-      {/* 커뮤니티: URL 입력창 */}
+      {/* 커뮤니티: 주제 입력 */}
       {isCommunity && (
         <div className="mb-4 flex flex-col gap-1">
           <div className="flex gap-2">
@@ -176,7 +176,7 @@ export default function KanbanBoard({ categoryId, categorySlug }: { categoryId: 
               value={urlInput}
               onChange={(e) => { setUrlInput(e.target.value); setUrlError(""); }}
               onKeyDown={(e) => e.key === "Enter" && addByUrl()}
-              placeholder="커뮤니티 글 URL 붙여넣기 (예: https://aagag.com/issue/?idx=...)"
+              placeholder="숏츠 주제/아이디어 입력 (예: 아프리카 초원에서 사자가 차를 뒤집는 영상)"
               className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
             <button

@@ -73,7 +73,7 @@ const BASE_TABS = [
 ];
 
 function getTabs(articleType: string | null) {
-  if (articleType === "foreign") {
+  if (articleType === "foreign" || articleType === "community") {
     return [
       { key: "info",     label: "원문",   icon: FileText },
       { key: "script",   label: "스크립트", icon: AlignLeft },
@@ -797,7 +797,7 @@ function CommunityImagesTab({
   );
 }
 
-/* ────────────── 번안/해외 클립 탭 ────────────── */
+/* ────────────── 클립 탭 (커뮤니티 + 번안 공용) ────────────── */
 function ClipTab({
   article,
   onSave,
@@ -807,12 +807,8 @@ function ClipTab({
   onSave: (fields: Partial<ArticleDetail>) => Promise<void>;
   onReload: () => void;
 }) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searching, setSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<{videoId: string; title: string; channelTitle: string; thumbnail: string}[]>([]);
-  const [searchError, setSearchError] = useState("");
-
-  const [selectedVideo, setSelectedVideo] = useState<{videoId: string; title: string} | null>(null);
+  const [pasteUrl, setPasteUrl] = useState("");
+  const [pasteTitle, setPasteTitle] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -822,24 +818,22 @@ function ClipTab({
     try { return article.foreign_video_clips ? JSON.parse(article.foreign_video_clips) : []; } catch { return []; }
   })();
 
-  const search = async () => {
-    if (!searchQuery.trim()) return;
-    setSearching(true);
-    setSearchError("");
-    try {
-      const res = await fetch(`/api/youtube/search?q=${encodeURIComponent(searchQuery)}&cc=true`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "검색 오류");
-      setSearchResults(data);
-    } catch (e: unknown) {
-      setSearchError(e instanceof Error ? e.message : "오류");
-    } finally {
-      setSearching(false);
-    }
+  // URL에서 videoId 추출
+  const extractVideoId = (url: string): string | null => {
+    const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([\w-]{11})/);
+    return m ? m[1] : null;
   };
 
+  // YouTube CC 검색 URL 생성 (스크립트 제목 기반)
+  const ccSearchQuery = encodeURIComponent(article.title ?? "");
+  const ccSearchUrl = `https://www.youtube.com/results?search_query=${ccSearchQuery}&sp=EgIwAQ%253D%253D`;
+
   const downloadClip = async () => {
-    if (!selectedVideo) return;
+    const videoId = extractVideoId(pasteUrl.trim());
+    if (!videoId) {
+      setDownloadError("올바른 YouTube 링크를 붙여넣어 주세요.");
+      return;
+    }
     const start = parseInt(startTime);
     const end = parseInt(endTime);
     if (isNaN(start) || isNaN(end) || end <= start) {
@@ -853,16 +847,18 @@ function ClipTab({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          videoId: selectedVideo.videoId,
+          videoId,
           start,
           end,
           articleId: article.id,
           clipIdx: clips.length,
+          label: pasteTitle.trim() || undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "다운로드 오류");
-      setSelectedVideo(null);
+      setPasteUrl("");
+      setPasteTitle("");
       setStartTime("");
       setEndTime("");
       onReload();
@@ -879,8 +875,34 @@ function ClipTab({
     onReload();
   };
 
+  const pastedVideoId = extractVideoId(pasteUrl);
+
   return (
     <div className="p-5 space-y-5">
+
+      {/* YouTube CC 검색 안내 */}
+      <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🎬</span>
+          <div>
+            <p className="text-sm font-semibold text-red-800">YouTube CC 영상 검색</p>
+            <p className="text-xs text-red-600">크리에이티브 커먼즈 라이선스 영상만 표시됩니다</p>
+          </div>
+        </div>
+        <a
+          href={ccSearchUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center justify-center gap-2 w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+        >
+          <ExternalLink size={14} />
+          &quot;{article.title}&quot; CC 검색 열기
+        </a>
+        <p className="text-xs text-red-500">
+          ① 위 버튼으로 YouTube 검색 → ② 영상 선택 후 URL 복사 → ③ 아래에 붙여넣기
+        </p>
+      </div>
+
       {/* 추가된 클립 목록 */}
       {clips.length > 0 && (
         <div>
@@ -894,7 +916,9 @@ function ClipTab({
                   className="w-20 h-12 object-cover rounded flex-shrink-0"
                 />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">클립 {i + 1}</p>
+                  <p className="text-sm font-medium text-gray-800 truncate">
+                    {clip.label ?? `클립 ${i + 1}`}
+                  </p>
                   <p className="text-xs text-gray-500">{clip.start}초 ~ {clip.end}초 ({clip.end - clip.start}초)</p>
                   {clip.filename && <p className="text-[10px] text-gray-400 truncate">{clip.filename}</p>}
                 </div>
@@ -918,108 +942,96 @@ function ClipTab({
         </div>
       )}
 
-      {/* CC 영상 검색 */}
-      <div>
-        <Label>CC(크리에이티브 커먼즈) 영상 검색</Label>
-        <div className="flex gap-2">
+      {/* 영상 URL 붙여넣기 + 시간 지정 */}
+      <div className="border rounded-xl p-4 space-y-3">
+        <Label>클립 추가</Label>
+
+        <div>
+          <label className="text-xs text-gray-500 font-medium">YouTube URL 붙여넣기</label>
           <input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && search()}
-            placeholder="검색어 입력 (영어 권장)"
-            className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            value={pasteUrl}
+            onChange={(e) => { setPasteUrl(e.target.value); setDownloadError(""); }}
+            placeholder="https://www.youtube.com/watch?v=xxxxx"
+            className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
           />
-          <button
-            onClick={search}
-            disabled={searching || !searchQuery.trim()}
-            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
-          >
-            {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-            검색
-          </button>
         </div>
-        {searchError && <p className="text-red-500 text-xs mt-2 bg-red-50 p-2 rounded">{searchError}</p>}
-      </div>
 
-      {/* 검색 결과 */}
-      {searchResults.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs text-gray-400">클릭하여 클립 추가할 영상 선택</p>
-          {searchResults.map((video) => (
-            <button
-              key={video.videoId}
-              onClick={() => setSelectedVideo({ videoId: video.videoId, title: video.title })}
-              className={`w-full flex items-center gap-3 p-2 rounded-lg border text-left transition-colors ${
-                selectedVideo?.videoId === video.videoId
-                  ? "border-blue-500 bg-blue-50"
-                  : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              <img src={video.thumbnail} alt={video.title} className="w-20 h-12 object-cover rounded flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 line-clamp-2 leading-snug">{video.title}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{video.channelTitle}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* 클립 시간 지정 */}
-      {selectedVideo && (
-        <div className="border rounded-xl p-4 space-y-3 bg-blue-50/40">
-          <Label>클립 시간 지정</Label>
-          <p className="text-sm font-medium text-gray-800 truncate">{selectedVideo.title}</p>
-          <a
-            href={`https://www.youtube.com/watch?v=${selectedVideo.videoId}`}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1.5 text-blue-600 hover:underline text-xs"
-          >
-            <ExternalLink size={11} /> YouTube에서 시청하기 (시간 확인)
-          </a>
-          <div className="flex gap-3 items-center">
-            <div className="flex-1">
-              <label className="text-xs text-gray-500 font-medium">시작 (초)</label>
-              <input
-                type="number"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                placeholder="예) 30"
-                className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              />
-            </div>
-            <div className="flex-1">
-              <label className="text-xs text-gray-500 font-medium">종료 (초)</label>
-              <input
-                type="number"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                placeholder="예) 90"
-                className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              />
+        {/* URL 미리보기 */}
+        {pastedVideoId && (
+          <div className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg border">
+            <img
+              src={`https://img.youtube.com/vi/${pastedVideoId}/mqdefault.jpg`}
+              alt="preview"
+              className="w-20 h-12 object-cover rounded flex-shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-gray-500 truncate">video ID: {pastedVideoId}</p>
+              <a
+                href={`https://www.youtube.com/watch?v=${pastedVideoId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+              >
+                <ExternalLink size={10} /> YouTube에서 시청 (시간 확인)
+              </a>
             </div>
           </div>
-          {startTime && endTime && parseInt(endTime) > parseInt(startTime) && (
-            <p className="text-xs text-gray-500">클립 길이: {parseInt(endTime) - parseInt(startTime)}초</p>
-          )}
-          {downloadError && <p className="text-red-500 text-xs bg-red-50 p-2 rounded">{downloadError}</p>}
-          <button
-            onClick={downloadClip}
-            disabled={downloading}
-            className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
-          >
-            {downloading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            {downloading ? "다운로드 중... (수분 소요)" : "클립 추가"}
-          </button>
-        </div>
-      )}
+        )}
 
-      {clips.length === 0 && searchResults.length === 0 && (
-        <div className="text-center py-8 text-gray-400">
-          <Scissors size={32} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">CC 영상을 검색하여 클립을 추가하세요.</p>
-          <p className="text-xs mt-1">추가된 클립은 영상 합성 시 사용됩니다.</p>
+        <div>
+          <label className="text-xs text-gray-500 font-medium">설명 (선택)</label>
+          <input
+            value={pasteTitle}
+            onChange={(e) => setPasteTitle(e.target.value)}
+            placeholder="예) 사자가 차 뒤집는 장면"
+            className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          />
+        </div>
+
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className="text-xs text-gray-500 font-medium">시작 (초)</label>
+            <input
+              type="number"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              placeholder="예) 30"
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="text-xs text-gray-500 font-medium">종료 (초)</label>
+            <input
+              type="number"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              placeholder="예) 90"
+              className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+          </div>
+        </div>
+
+        {startTime && endTime && parseInt(endTime) > parseInt(startTime) && (
+          <p className="text-xs text-blue-600 font-medium">
+            클립 길이: {parseInt(endTime) - parseInt(startTime)}초
+          </p>
+        )}
+
+        {downloadError && <p className="text-red-500 text-xs bg-red-50 p-2 rounded">{downloadError}</p>}
+
+        <button
+          onClick={downloadClip}
+          disabled={downloading || !pasteUrl.trim() || !startTime || !endTime}
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+        >
+          {downloading ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}
+          {downloading ? "클립 다운로드 중... (수분 소요)" : "클립 잘라서 추가"}
+        </button>
+      </div>
+
+      {clips.length === 0 && (
+        <div className="text-center py-4 text-gray-400">
+          <p className="text-xs">위 CC 검색에서 영상을 찾은 후 URL을 붙여넣어 클립을 추가하세요.</p>
         </div>
       )}
     </div>
