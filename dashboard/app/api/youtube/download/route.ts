@@ -8,7 +8,7 @@ import { promisify } from "util";
 const execAsync = promisify(exec);
 
 export async function POST(req: NextRequest) {
-  const { videoId, start, end, articleId, clipIdx = 0 } = await req.json();
+  const { videoId, start, end, articleId, clipIdx = 0, label, caption } = await req.json();
 
   if (!videoId || !articleId) {
     return NextResponse.json({ error: "videoId와 articleId가 필요합니다." }, { status: 400 });
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
   let clips: object[] = [];
   try { clips = article?.foreign_video_clips ? JSON.parse(article.foreign_video_clips) : []; } catch { /* empty */ }
 
-  clips[clipIdx] = { videoId, start, end, clipPath: outputPath, filename };
+  clips[clipIdx] = { videoId, start, end, clipPath: outputPath, filename, label: label ?? null, caption: caption ?? null };
 
   db.prepare("UPDATE articles SET foreign_video_clips = ?, foreign_video_id = ? WHERE id = ?")
     .run(JSON.stringify(clips), videoId, Number(articleId));

@@ -55,7 +55,7 @@ type ArticleDetail = {
 };
 
 type CommunityImage = { url: string; selected: boolean; order: number };
-type ForeignClip = { videoId: string; start: number; end: number; label?: string; clipPath?: string; filename?: string };
+type ForeignClip = { videoId: string; start: number; end: number; label?: string; clipPath?: string; filename?: string; caption?: string };
 
 const STAGE_LABELS: Record<string, string> = {
   collected: "수집됨", approved: "반응 좋음", scripting: "스크립트",
@@ -808,32 +808,30 @@ function ClipTab({
   onReload: () => void;
 }) {
   const [pasteUrl, setPasteUrl] = useState("");
-  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteLabel, setPasteLabel] = useState("");
+  const [pasteCaption, setPasteCaption] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [editingCaptionIdx, setEditingCaptionIdx] = useState<number | null>(null);
+  const [editingCaptionText, setEditingCaptionText] = useState("");
 
   const clips: ForeignClip[] = (() => {
     try { return article.foreign_video_clips ? JSON.parse(article.foreign_video_clips) : []; } catch { return []; }
   })();
 
-  // URL에서 videoId 추출
   const extractVideoId = (url: string): string | null => {
     const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([\w-]{11})/);
     return m ? m[1] : null;
   };
 
-  // YouTube CC 검색 URL 생성 (스크립트 제목 기반)
   const ccSearchQuery = encodeURIComponent(article.title ?? "");
   const ccSearchUrl = `https://www.youtube.com/results?search_query=${ccSearchQuery}&sp=EgIwAQ%253D%253D`;
 
   const downloadClip = async () => {
     const videoId = extractVideoId(pasteUrl.trim());
-    if (!videoId) {
-      setDownloadError("올바른 YouTube 링크를 붙여넣어 주세요.");
-      return;
-    }
+    if (!videoId) { setDownloadError("올바른 YouTube 링크를 붙여넣어 주세요."); return; }
     const start = parseInt(startTime);
     const end = parseInt(endTime);
     if (isNaN(start) || isNaN(end) || end <= start) {
@@ -847,20 +845,16 @@ function ClipTab({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          videoId,
-          start,
-          end,
+          videoId, start, end,
           articleId: article.id,
           clipIdx: clips.length,
-          label: pasteTitle.trim() || undefined,
+          label: pasteLabel.trim() || undefined,
+          caption: pasteCaption.trim() || undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "다운로드 오류");
-      setPasteUrl("");
-      setPasteTitle("");
-      setStartTime("");
-      setEndTime("");
+      setPasteUrl(""); setPasteLabel(""); setPasteCaption(""); setStartTime(""); setEndTime("");
       onReload();
     } catch (e: unknown) {
       setDownloadError(e instanceof Error ? e.message : "오류");
@@ -875,12 +869,20 @@ function ClipTab({
     onReload();
   };
 
+  const saveCaption = async (idx: number) => {
+    const next = clips.map((c, i) => i === idx ? { ...c, caption: editingCaptionText } : c);
+    await onSave({ foreign_video_clips: JSON.stringify(next) });
+    setEditingCaptionIdx(null);
+    onReload();
+  };
+
   const pastedVideoId = extractVideoId(pasteUrl);
+  const totalSecs = clips.reduce((acc, c) => acc + (c.end - c.start), 0);
 
   return (
     <div className="p-5 space-y-5">
 
-      {/* YouTube CC 검색 안내 */}
+      {/* YouTube CC 검색 */}
       <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
         <div className="flex items-center gap-2">
           <span className="text-lg">🎬</span>
@@ -893,56 +895,101 @@ function ClipTab({
           href={ccSearchUrl}
           target="_blank"
           rel="noreferrer"
-          className="flex items-center justify-center gap-2 w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+          className="flex items-center justify-center gap-2 w-full py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium"
         >
           <ExternalLink size={14} />
           &quot;{article.title}&quot; CC 검색 열기
         </a>
-        <p className="text-xs text-red-500">
-          ① 위 버튼으로 YouTube 검색 → ② 영상 선택 후 URL 복사 → ③ 아래에 붙여넣기
-        </p>
+        <p className="text-xs text-red-500">① 위 버튼으로 YouTube 검색 → ② 영상 선택 후 URL 복사 → ③ 아래에 붙여넣기</p>
       </div>
 
       {/* 추가된 클립 목록 */}
       {clips.length > 0 && (
         <div>
-          <Label>추가된 클립 ({clips.length}개)</Label>
-          <div className="space-y-2">
+          <div className="flex items-center justify-between mb-2">
+            <Label>추가된 클립 ({clips.length}개)</Label>
+            <span className="text-xs text-gray-400">총 {totalSecs}초</span>
+          </div>
+          <div className="space-y-3">
             {clips.map((clip, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 border rounded-lg">
-                <img
-                  src={`https://img.youtube.com/vi/${clip.videoId}/mqdefault.jpg`}
-                  alt={`클립 ${i + 1}`}
-                  className="w-20 h-12 object-cover rounded flex-shrink-0"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">
-                    {clip.label ?? `클립 ${i + 1}`}
-                  </p>
-                  <p className="text-xs text-gray-500">{clip.start}초 ~ {clip.end}초 ({clip.end - clip.start}초)</p>
-                  {clip.filename && <p className="text-[10px] text-gray-400 truncate">{clip.filename}</p>}
+              <div key={i} className="border rounded-xl overflow-hidden">
+                {/* 클립 헤더 */}
+                <div className="flex items-center gap-3 p-3 bg-gray-50">
+                  <img
+                    src={`https://img.youtube.com/vi/${clip.videoId}/mqdefault.jpg`}
+                    alt={`클립 ${i + 1}`}
+                    className="w-20 h-12 object-cover rounded flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-800">클립 {i + 1}{clip.label ? ` — ${clip.label}` : ""}</p>
+                    <p className="text-xs text-gray-500">{clip.start}초 ~ {clip.end}초 ({clip.end - clip.start}초)</p>
+                    {clip.filename && <p className="text-[10px] text-gray-400 truncate">{clip.filename}</p>}
+                  </div>
+                  <a
+                    href={`https://www.youtube.com/watch?v=${clip.videoId}&t=${clip.start}`}
+                    target="_blank" rel="noreferrer"
+                    className="text-blue-400 hover:text-blue-600 flex-shrink-0"
+                  >
+                    <ExternalLink size={14} />
+                  </a>
+                  <button onClick={() => removeClip(i)} className="text-red-400 hover:text-red-600 flex-shrink-0">
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-                <a
-                  href={`https://www.youtube.com/watch?v=${clip.videoId}&t=${clip.start}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-500 hover:text-blue-700 flex-shrink-0"
-                >
-                  <ExternalLink size={14} />
-                </a>
-                <button
-                  onClick={() => removeClip(i)}
-                  className="text-red-400 hover:text-red-600 flex-shrink-0"
-                >
-                  <Trash2 size={14} />
-                </button>
+
+                {/* 자막 영역 */}
+                <div className="p-3 bg-black/5 border-t">
+                  {editingCaptionIdx === i ? (
+                    <div className="space-y-2">
+                      <textarea
+                        value={editingCaptionText}
+                        onChange={(e) => setEditingCaptionText(e.target.value)}
+                        rows={2}
+                        placeholder="이 클립에 표시할 자막 (검은 박스 + 흰 글씨)"
+                        className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => saveCaption(i)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium"
+                        >
+                          <CheckCircle size={12} /> 저장
+                        </button>
+                        <button
+                          onClick={() => setEditingCaptionIdx(null)}
+                          className="px-3 py-1.5 border rounded-lg text-xs text-gray-500 hover:bg-gray-100"
+                        >
+                          취소
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { setEditingCaptionIdx(i); setEditingCaptionText(clip.caption ?? ""); }}
+                      className="w-full text-left"
+                    >
+                      {clip.caption ? (
+                        /* 자막 미리보기: 검은 박스 + 흰 글씨 */
+                        <div className="bg-black rounded-lg px-4 py-2.5 inline-block min-w-full">
+                          <p className="text-white text-sm font-bold whitespace-pre-line leading-snug">{clip.caption}</p>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-gray-400 text-xs py-1">
+                          <Plus size={12} />
+                          자막 추가 (클릭)
+                        </div>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* 영상 URL 붙여넣기 + 시간 지정 */}
+      {/* 클립 추가 폼 */}
       <div className="border rounded-xl p-4 space-y-3">
         <Label>클립 추가</Label>
 
@@ -956,7 +1003,6 @@ function ClipTab({
           />
         </div>
 
-        {/* URL 미리보기 */}
         {pastedVideoId && (
           <div className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg border">
             <img
@@ -964,47 +1010,27 @@ function ClipTab({
               alt="preview"
               className="w-20 h-12 object-cover rounded flex-shrink-0"
             />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-500 truncate">video ID: {pastedVideoId}</p>
-              <a
-                href={`https://www.youtube.com/watch?v=${pastedVideoId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-              >
-                <ExternalLink size={10} /> YouTube에서 시청 (시간 확인)
-              </a>
-            </div>
+            <a
+              href={`https://www.youtube.com/watch?v=${pastedVideoId}`}
+              target="_blank" rel="noreferrer"
+              className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+            >
+              <ExternalLink size={10} /> YouTube에서 시청 (시간 확인)
+            </a>
           </div>
         )}
-
-        <div>
-          <label className="text-xs text-gray-500 font-medium">설명 (선택)</label>
-          <input
-            value={pasteTitle}
-            onChange={(e) => setPasteTitle(e.target.value)}
-            placeholder="예) 사자가 차 뒤집는 장면"
-            className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
-          />
-        </div>
 
         <div className="flex gap-3">
           <div className="flex-1">
             <label className="text-xs text-gray-500 font-medium">시작 (초)</label>
-            <input
-              type="number"
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
+            <input type="number" value={startTime} onChange={(e) => setStartTime(e.target.value)}
               placeholder="예) 30"
               className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
           <div className="flex-1">
             <label className="text-xs text-gray-500 font-medium">종료 (초)</label>
-            <input
-              type="number"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
+            <input type="number" value={endTime} onChange={(e) => setEndTime(e.target.value)}
               placeholder="예) 90"
               className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
@@ -1012,10 +1038,35 @@ function ClipTab({
         </div>
 
         {startTime && endTime && parseInt(endTime) > parseInt(startTime) && (
-          <p className="text-xs text-blue-600 font-medium">
-            클립 길이: {parseInt(endTime) - parseInt(startTime)}초
-          </p>
+          <p className="text-xs text-blue-600 font-medium">클립 길이: {parseInt(endTime) - parseInt(startTime)}초</p>
         )}
+
+        <div>
+          <label className="text-xs text-gray-500 font-medium">클립 자막 <span className="text-gray-400 font-normal">(검은 박스 + 흰 글씨로 표시)</span></label>
+          <textarea
+            value={pasteCaption}
+            onChange={(e) => setPasteCaption(e.target.value)}
+            rows={2}
+            placeholder={"예) 아프리카 초원에서\n사자가 차를 뒤집었다!"}
+            className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
+          />
+          {/* 자막 미리보기 */}
+          {pasteCaption && (
+            <div className="mt-2 bg-black rounded-lg px-4 py-2.5 inline-block">
+              <p className="text-white text-sm font-bold whitespace-pre-line leading-snug">{pasteCaption}</p>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="text-xs text-gray-500 font-medium">설명 레이블 <span className="text-gray-400 font-normal">(관리용, 선택)</span></label>
+          <input
+            value={pasteLabel}
+            onChange={(e) => setPasteLabel(e.target.value)}
+            placeholder="예) 사자가 차 뒤집는 장면"
+            className="w-full border rounded-lg px-3 py-2 text-sm mt-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          />
+        </div>
 
         {downloadError && <p className="text-red-500 text-xs bg-red-50 p-2 rounded">{downloadError}</p>}
 
@@ -1030,9 +1081,7 @@ function ClipTab({
       </div>
 
       {clips.length === 0 && (
-        <div className="text-center py-4 text-gray-400">
-          <p className="text-xs">위 CC 검색에서 영상을 찾은 후 URL을 붙여넣어 클립을 추가하세요.</p>
-        </div>
+        <p className="text-center text-xs text-gray-400">위 CC 검색에서 영상을 찾은 후 URL을 붙여넣어 클립을 추가하세요.</p>
       )}
     </div>
   );
